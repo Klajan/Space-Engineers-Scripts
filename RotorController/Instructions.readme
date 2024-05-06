@@ -1,0 +1,46 @@
+﻿R e a d m e
+-----------
+
+This Script is able to rotate Rotors or Hinges.
+Each configured Rotor will save the Upper & Lower Limit that is set on the block at startup and respect these during rotation.
+
+Most of the controll happens with the supplied arguments
+
+------------------------
+ARGUMENTS
+------------------------
+
+This Script is controlled with the supplied Arguments.
+
+- If no Arguments are supplied all Rotors will be stopped.
+
+- The first Argument is the Angle the Rotors should be rotated towards,
+  if no second Argument is presend this applies to all configured Rotors.
+
+- If a second Argument is present only the Rotor of this Name will be rotated.
+  In case the Rotor Name contains Spaces enclose the name in Quotes ""
+
+Example Arguments (enclosed in Single Quotes '):
+Rotate all Rotors to 90°
+'90'
+Rotate the Rotor "Rotor 1" to -90°
+'-90 "Rotor 1"'
+
+------------------------
+CONFIGURATION
+------------------------
+
+This Script is configured with the CustomData of the Programmable Block, each config value should be in a new line.
+
+The Following Config Values are supported:
+
+DesiredVelocity= The desired RPM the Rotors should rotate at
+RotorNames=[] An Array of quoted Names, the Array is enclosed with '[]' and the values sperated by ','
+
+Configuration Example:
+
+DesiredVelocity=1.5
+RotorNames=[
+"Rotor1",
+"Rotor2",
+]
