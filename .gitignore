@@ -4,5 +4,5 @@
 *obj/
 *.csproj.user
 # MDK
-/RotorController/MDK/
-/RotorController/RotorController.mdk.local.ini
+/*/MDK/
+/*/*.mdk.local.ini
