@@ -5,6 +5,8 @@ VisualStudioVersion = 17.9.34728.123
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RotorController", "RotorController\RotorController.csproj", "{20214569-0DFC-4A06-B950-BB92956CD1D0}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Vole Mining Drone CPU", "Vole Mining Drone CPU\Vole Mining Drone CPU.csproj", "{31355D51-D4A0-4C22-B198-CB7A3CE1D6BA}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -15,6 +17,10 @@ Global
 		{20214569-0DFC-4A06-B950-BB92956CD1D0}.Debug|x64.Build.0 = Debug|x64
 		{20214569-0DFC-4A06-B950-BB92956CD1D0}.Release|x64.ActiveCfg = Release|x64
 		{20214569-0DFC-4A06-B950-BB92956CD1D0}.Release|x64.Build.0 = Release|x64
+		{31355D51-D4A0-4C22-B198-CB7A3CE1D6BA}.Debug|x64.ActiveCfg = Debug|x64
+		{31355D51-D4A0-4C22-B198-CB7A3CE1D6BA}.Debug|x64.Build.0 = Debug|x64
+		{31355D51-D4A0-4C22-B198-CB7A3CE1D6BA}.Release|x64.ActiveCfg = Debug|x64
+		{31355D51-D4A0-4C22-B198-CB7A3CE1D6BA}.Release|x64.Build.0 = Debug|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

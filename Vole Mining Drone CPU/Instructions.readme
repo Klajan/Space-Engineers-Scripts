@@ -1,0 +1,30 @@
+﻿R e a d m e
+-----------
+
+To use this script CustomData needs to be added to the Legs that should be controlled.
+Exptected CustomData is for 4 Legs:
+{Prefix} == One per leg from [FL, FR, RL, RR]
+
+# Horizontal Hip Hinge
+- "{Prefix}HipHingeH"
+
+# Vertical Hip Hinge
+- "{Prefix}HipHingeV"
+
+# Piston Connecting to Hip Hinges
+- "{Prefix}UpperLegPiston"
+
+# Hinge Connecting to Upper Leg Piston
+- "{Prefix}KneeHinge"
+
+# Piston Connecting to Knee Hinge
+- "{Prefix}LowerLegPiston"
+
+# Hinge Conneting to Lower Leg Piston
+- "{Prefix}FootHinge"
+
+# Sensor on Upper Leg set to detect Terrain
+- "{Prefix}LegSensor"
+
+# Landing Gear / Magnets on the end of the Foot Hinge
+- "{Prefix}LegLandingGear"

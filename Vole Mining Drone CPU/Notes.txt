@@ -1,0 +1,19 @@
+﻿Sequences for down movement:
+-   Increase foot Hinge Lower Limit (3x?)
+Repeat:
+-   Retract Drill
+-   Unlock Magnets
+    Disable Magnets
+    Disable Leg Sensor
+    Retract Lower Leg Piston
+    Move Knee hinge to 90° & Foot Hinge to 0° & Hip Hinge to 90°
+    Retract Upper Leg Piston
+-   Enable Leg Sensor
+    Move Hip Hinge to 0°
+    Above 45° Extend Upper Leg Piston
+    Stop when Leg Sensor is Triggered
+-   Extend Lower Leg Piston
+-   Repeat for each of the other 3 Legs
+-   Unlock ALL Foot & Knee Hinge
+-   Extend ALL Upper Leg Pistons
+-   Lock ALL Foot & Knee Hinge
