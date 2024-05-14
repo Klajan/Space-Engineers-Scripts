@@ -18,6 +18,8 @@ using VRage.Game.ModAPI.Ingame;
 using VRage.Game.ModAPI.Ingame.Utilities;
 using VRage.Game.ObjectBuilders.Definitions;
 using VRageMath;
+using IMyShipDrill = Sandbox.ModAPI.Ingame.IMyShipDrill;
+using IMyShipConnector = Sandbox.ModAPI.Ingame.IMyShipConnector;
 
 namespace IngameScript
 {
@@ -39,6 +41,16 @@ namespace IngameScript
 
             public bool IsInitialized { get; private set; }
 
+            public IList<IMyInventory> GetDrillInventories()
+            {
+                var drillInv = new List<IMyInventory>();
+                foreach (var drill in _shipDrills)
+                {
+                    drillInv.Add(drill.GetInventory());
+                }
+                return drillInv;
+            }
+
             public static DrillDefinition CreateFromLists(Program program, List<IMyMotorStator> statorList, List<IMyPistonBase> pistonList, List<IMyShipDrill> drillList, List<IMyShipConnector> connectorList)
             {
                 DrillDefinition drill = new DrillDefinition
@@ -48,25 +60,25 @@ namespace IngameScript
                 IMyMotorStator myMotor = statorList.Find(stator => stator.CustomData.Contains("DrillRotor"));
                 if(myMotor == null)
                 {
-                    program.Echo("Could not initalize DrillPiston, no CustomData found!");
+                    program.Echo("Could not initalize DrillPiston, no CustomData 'DrillRotor' found!");
                     drill.IsInitialized = false;
                 }
                 IMyPistonBase myPiston = pistonList.Find(piston => piston.CustomData.Contains("DrillPiston"));
                 if (myPiston == null)
                 {
-                    program.Echo("Could not initalize DrillRotor, no CustomData found!");
+                    program.Echo("Could not initalize DrillRotor, no CustomData 'DrillPiston' found!");
                     drill.IsInitialized = false;
                 }
                 List<IMyShipDrill> myShipDrills = drillList.FindAll(sdrill => sdrill.CustomData.Contains("MiningDrill"));
                 if (myShipDrills == null || myShipDrills.Count == 0)
                 {
-                    program.Echo($"Could not initalize MiningDrills, no CustomData found!");
+                    program.Echo($"Could not initalize MiningDrills, no CustomData 'MiningDrill' found!");
                     drill.IsInitialized = false;
                 }
                 List<IMyShipConnector> myShipConnectors = connectorList.FindAll(conn => conn.CustomData.Contains("EjectorConnector"));
                 if (myShipConnectors == null || myShipConnectors.Count == 0)
                 {
-                    program.Echo($"Could not initalize EjectorConnectors, no CustomData found!");
+                    program.Echo($"Could not initalize EjectorConnectors, no CustomData 'EjectorConnector' found!");
                     drill.IsInitialized = false;
                 }
                 
