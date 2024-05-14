@@ -23,6 +23,8 @@ namespace IngameScript
 {
     partial class Program : MyGridProgram
     {
+        const float DrillSpeed = 0.04f;
+        const float DrillRPM = 3f;
         // This file contains your actual script.
         //
         // You can either keep all your code here, or you can create separate
@@ -50,12 +52,20 @@ namespace IngameScript
         private LegMovementController LegControllerRR;
         private DrillController MainDrillController;
 
+        private StorageMonitor storageMonitor;
         private SequenceController sequenceController;
 
         private PersistantStorage persistantStorage;
 
+        private MyCommandLine _commandLine = new MyCommandLine();
+        private Dictionary<string, Action> _commands = new Dictionary<string, Action>(StringComparer.OrdinalIgnoreCase);
+        private SimpleMovingAverage runtimeAvg = new SimpleMovingAverage(100);
+
+        private bool _inventoryFull = false;
+
         public Program()
         {
+            _debugEcho = Echo;
             // The constructor, called only once every session and
             // always before any other method is called. Use it to
             // initialize your script. 
@@ -79,6 +89,12 @@ namespace IngameScript
             GridTerminalSystem.GetBlocksOfType(drills, block => block.IsSameConstructAs(Me));
             var connectors = new List<IMyShipConnector>();
             GridTerminalSystem.GetBlocksOfType(connectors, block => block.IsSameConstructAs(Me));
+            var storages = new List<IMyCargoContainer>();
+            GridTerminalSystem.GetBlocksOfType(storages, block => block.IsSameConstructAs(Me));
+            if(storages == null || storages.Count == 0)
+            {
+                Echo("No CargoContainers found!");
+            }
 
             var flLeg = LegDefinition.CreateFromLists(this, LegDefinition.LegLocation.FrontLeft, rotors, pistons, sensors, landingGears);
             var frLeg = LegDefinition.CreateFromLists(this, LegDefinition.LegLocation.FrontRight, rotors, pistons, sensors, landingGears);
@@ -89,18 +105,33 @@ namespace IngameScript
             
             if (!flLeg.IsInitialized | !frLeg.IsInitialized | !rlLeg.IsInitialized | !rrLeg.IsInitialized | !mainDrill.IsInitialized) return;
 
-            MainDrillController = new DrillController(mainDrill);
+            MainDrillController = new DrillController(mainDrill, DrillSpeed, DrillRPM);
             LegControllerFL = new LegMovementController(flLeg);
             LegControllerFR = new LegMovementController(frLeg);
             LegControllerRL = new LegMovementController(rlLeg);
             LegControllerRR = new LegMovementController(rrLeg);
-            sequenceController = new SequenceController(this, LegControllerFL, LegControllerFR, LegControllerRL, LegControllerRR);
+            sequenceController = new SequenceController(this, LegControllerFL, LegControllerFR, LegControllerRL, LegControllerRR, MainDrillController);
+            storageMonitor = new StorageMonitor(storages);
+            storageMonitor.RegisterCargo(MainDrillController.DrillDef.GetDrillInventories());
 
             persistantStorage.Register(LegControllerFL);
             persistantStorage.Register(LegControllerFR);
             persistantStorage.Register(LegControllerRL);
             persistantStorage.Register(LegControllerRR);
             persistantStorage.Register(sequenceController);
+            persistantStorage.Register(MainDrillController);
+
+            RegisterCommands();
+
+            if(this.Storage != string.Empty)
+            {
+                if (persistantStorage.DeserializeAll(this.Storage))
+                {
+                    Echo("Successfully loaded previous session!");
+                }
+            }
+
+            this.Runtime.UpdateFrequency = UpdateFrequency.Update10 | UpdateFrequency.Update100;
         }
 
         public void Save()
@@ -111,6 +142,7 @@ namespace IngameScript
             // 
             // This method is optional and can be removed if not
             // needed.
+            this.Storage = persistantStorage.SerializeAll();
         }
 
         public void Main(string argument, UpdateType updateSource)
@@ -124,18 +156,116 @@ namespace IngameScript
             // 
             // The method itself is required, but the arguments above
             // can be removed if not needed.
-            sequenceController.Pack();
-            //sequenceController.Unpack();
+            if((updateSource & (UpdateType.Terminal | UpdateType.Trigger | UpdateType.Script)) != 0)
+            {
+                RunDefault(argument);
+            }
+            else if ((updateSource & UpdateType.Update1) != 0)
+            {
+
+            }
+            else if ((updateSource & UpdateType.Update10) != 0)
+            {
+                if(sequenceController.IsRunning)
+                {
+                    sequenceController.TryNextStep();
+                }
+            }
+            else if ((updateSource & UpdateType.Update100) != 0)
+            {
+                _inventoryFull = storageMonitor.CheckInventoryFull();
+                if (_inventoryFull)
+                {
+                    Echo("Inventory full!");
+                }
+                Echo($"Last RunTime: {this.Runtime.LastRunTimeMs}ms");
+                Echo($"Average RunTime: {runtimeAvg.Update(this.Runtime.LastRunTimeMs)}ms");
+            }
         }
+
+        public void RunDefault(string argument)
+        {
+            if (_commandLine.TryParse(argument))
+            {
+                Action commandAction;
+
+                // Retrieve the first argument. Switches are ignored.
+                string command = _commandLine.Argument(0);
+
+                // Now we must validate that the first argument is actually specified, 
+                // then attempt to find the matching command delegate.
+                if (command == null)
+                {
+                    Echo("No command specified");
+                }
+                else if (_commands.TryGetValue(command, out commandAction))
+                {
+                    // We have found a command. Invoke it.
+                    commandAction();
+                }
+                else
+                {
+                    Echo($"Unknown command {command}");
+                }
+            }
+        }
+
+        private void LoadNow()
+        {
+            persistantStorage.DeserializeAll(this.Storage);
+        }
+        private void SaveNow()
+        {
+            this.Storage = persistantStorage.SerializeAll();
+        }
+
+        private void RegisterCommands()
+        {
+            _commands.Add("pack", sequenceController.Pack);
+            _commands.Add("unpack", sequenceController.Unpack);
+            _commands.Add("descend", sequenceController.StartDescend);
+            _commands.Add("ascend", sequenceController.StartAscend);
+            _commands.Add("stop", sequenceController.Stop);
+            _commands.Add("loadnow", LoadNow);
+            _commands.Add("savenow", SaveNow);
+        }
+
+        #region Helper Functions
 
         public static bool AreSimilar(float A, float B, float delta = 0.0001f)
         {
             return (Math.Abs(A - B) < delta);
         }
+
         public static bool AreSimilar(double A, double B, double delta = 0.0001)
         {
             return (Math.Abs(A - B) < delta);
         }
+
+        public static float RadiansToDegrees(float angle) => angle * (180.0f / (float)Math.PI);
+
+        public static float DegreesToRadians(float angle) => angle * ((float)Math.PI / 180.0f);
+
+        private static float Lerp(float from, float to, float by)
+        {
+            return from * (1 - by) + to * by;
+        }
+
+        public static T Clamp<T>(T value, T min, T max) where T : IComparable<T>
+        {
+            if (value.CompareTo(min) < 0) return min;
+            if (value.CompareTo(max) > 0) return max;
+            return value;
+        }
+
+        private static Action<string> _debugEcho = (message) => { };
+
+        public static void EchoDebug(string message)
+        {
+            _debugEcho(message);
+        }
+
+        #endregion
 
     }
 }

@@ -23,17 +23,11 @@ namespace IngameScript
 {
     partial class Program
     {
-        public class LegMovementController : ISaveable
+        public class LegMovementController : ISequence, ISaveable
         {
-            public enum MovementDirection
-            {
-                Down,
-                Up
-            }
-
-            private LegDefinition leg;
-            private float rotorRPM;
-            private float pistonSpeed;
+            private readonly LegDefinition leg;
+            private readonly float rotorRPM;
+            private readonly float pistonSpeed;
             private float returnMult;
 
             public LegDefinition GetLegDefinition() { return leg; }
@@ -43,70 +37,104 @@ namespace IngameScript
             #region SaveOnExitVariables
             private MovementDirection direction = MovementDirection.Down;
             public int MovementStep { get; private set; } = 0;
+            public bool SequenceInProgress { get; private set; } = false;
+            public bool SequenceEnded { get; private set; } = false;
             private bool legSensorTiggered = false;
             private bool landigGearLocked = false;
             public bool ShouldMoveNextLeg { get; private set; } = false;
-            public bool SequenceInProgress { get; private set; } = false;
-            public bool IsDefaultState { get; private set; } = true;
+            public bool IsWaitingForContinue { get; private set; } = false;
             public bool IsPacked { get; private set; } = true;
             public bool IsDisabled { get; private set; } = true;
+            public bool HasAscended { get; private set; } = false;
             #endregion
 
             #region ISaveable
-            const char seperator = '\u0091'; // Private Use Unciode Control Character
-            public string Serialize()
+            private const int minDataLength = sizeof(int) * 2 + sizeof(bool) * 9;
+            public byte[] Serialize()
             {
-                return string.Join(seperator.ToString(), direction, MovementStep, legSensorTiggered, landigGearLocked, ShouldMoveNextLeg, SequenceInProgress);
+                // Using slower LINQ method for conacting arrays for now, should still be faster then string concat
+                // const uint serialSize = sizeof(MovementDirection) + sizeof(int) + sizeof(bool);
+                byte[] data = BitConverter.GetBytes((int)direction)
+                    .Concat(BitConverter.GetBytes(MovementStep))
+                    .Concat(BitConverter.GetBytes(SequenceInProgress))
+                    .Concat(BitConverter.GetBytes(SequenceEnded))
+                    .Concat(BitConverter.GetBytes(legSensorTiggered))
+                    .Concat(BitConverter.GetBytes(landigGearLocked))
+                    .Concat(BitConverter.GetBytes(ShouldMoveNextLeg))
+                    .Concat(BitConverter.GetBytes(IsWaitingForContinue))
+                    .Concat(BitConverter.GetBytes(IsPacked))
+                    .Concat(BitConverter.GetBytes(IsDisabled))
+                    .Concat(BitConverter.GetBytes(HasAscended))
+                    .ToArray();
+
+                return data;
             }
-            public bool Deserialize(string dataString)
+            public bool Deserialize(byte[] data)
             {
+                if (data != null && data.Length < minDataLength) return false;
                 // TODO: Decrement MovementStep on load to reload callbacks;
+                int index = 0;
+                direction = (MovementDirection)BitConverter.ToInt32(data, index);
+                index += sizeof(int);
+                MovementStep = Math.Max(0, BitConverter.ToInt32(data, index) - 1);
+                index += sizeof(int);
+                SequenceInProgress = BitConverter.ToBoolean(data, index);
+                index += sizeof(bool);
+                SequenceEnded = BitConverter.ToBoolean(data, index);
+                index += sizeof(bool);
+                legSensorTiggered = BitConverter.ToBoolean(data, index);
+                index += sizeof(bool);
+                landigGearLocked = BitConverter.ToBoolean(data, index);
+                index += sizeof(bool);
+                ShouldMoveNextLeg = BitConverter.ToBoolean(data, index);
+                index += sizeof(bool);
+                IsWaitingForContinue = BitConverter.ToBoolean(data, index);
+                index += sizeof(bool);
+                IsPacked = BitConverter.ToBoolean(data, index);
+                index += sizeof(bool);
+                IsDisabled = BitConverter.ToBoolean(data, index);
+                index += sizeof(bool);
+                HasAscended = BitConverter.ToBoolean(data, index);
+                index += sizeof(bool);
                 return true;
             }
             public bool ShouldSerialize()
             {
-                return !IsDefaultState;
+                return SequenceInProgress || SequenceEnded || direction != MovementDirection.Down;
             }
             #endregion
 
-            public LegMovementController(LegDefinition definition, float rotorRPM = 2, float pistonSpeed = 0.5f, float returnMult = 1)
+            public LegMovementController(LegDefinition definition, float rotorRPM = 3, float pistonSpeed = 0.75f, float returnMult = 1)
             {
                 this.leg = definition; this.rotorRPM = rotorRPM; this.pistonSpeed = pistonSpeed; this.returnMult = returnMult; this.ShouldMoveNextLeg = false;
             }
 
-            public bool TryMoveNext()
+            #region ISequence
+            public UpdateFrequency MyUpdateFrequency { get; private set; } = UpdateFrequency.Update10;
+
+            public bool TryNextStep()
             {
                 if (!shouldContinueFunc()) return false;
-                if (direction == MovementDirection.Down)
-                {
-                    shouldContinueFunc = MovementDown();
-                    MovementStep++;
-                    return true;
-                }
-                else
-                {
-                    return false;
-                }
+                shouldContinueFunc = RunSequenceStep();
+                MovementStep++;
+                return true;
             }
+            #endregion
 
             public void Pack()
             {
-                rotateStatorToAngle(leg.FootHinge, 0);
+                RotorTools.RotateToDeg(leg.FootHinge, 0);
                 leg.KneeHinge.TargetVelocityRPM = rotorRPM;
                 leg.HipHingeVert.TargetVelocityRPM = rotorRPM;
                 leg.HipHingeHoriz.RotorLock = false;
                 leg.HipHingeHoriz.TargetVelocityRPM = rotorRPM;
-                unlockMagnets();
+                UnlockMagnets();
                 foreach (var magnet in leg.LegMagnets) { magnet.AutoLock = false; }
-                leg.LowerLegPiston.Retract();
-                leg.UpperLegPiston.Retract();
+                leg.LowerLegPiston.Velocity = -rotorRPM * 2;
+                leg.UpperLegPiston.Velocity = -rotorRPM * 1.5f;
                 leg.LegSenor.Enabled = false;
                 direction = MovementDirection.Down;
-                MovementStep = 0;
-                legSensorTiggered = false;
-                ShouldMoveNextLeg = false;
-                SequenceInProgress = false;
-                IsDefaultState = true;
+                resetFields();
             }
 
             public void Unpack()
@@ -118,11 +146,11 @@ namespace IngameScript
                 leg.HipHingeVert.TargetVelocityRPM = -rotorRPM;
                 leg.HipHingeHoriz.TargetVelocityRPM = -rotorRPM;
                 foreach (var magnet in leg.LegMagnets) { magnet.AutoLock = true; }
-                unlockMagnets();
-                leg.LowerLegPiston.Extend();
-                leg.UpperLegPiston.Extend();
+                UnlockMagnets();
+                leg.LowerLegPiston.Velocity = rotorRPM * 0.75f;
+                leg.UpperLegPiston.Velocity = rotorRPM * 1.25f;
                 direction = MovementDirection.Down;
-                MovementStep = 0;
+                resetFields();
             }
 
             public void EnableDisable(bool status)
@@ -139,210 +167,379 @@ namespace IngameScript
                 leg.LowerLegPiston.Enabled = status;
             }
 
-            public void Enable() { shouldContinueFunc = () => true; }
+            public void ContinueSequence() { shouldContinueFunc = () => true; }
 
             public void Disable() { shouldContinueFunc = () => false; }
+
+            private void resetFields()
+            {
+                MovementStep = 0;
+                SequenceInProgress = false;
+                SequenceEnded = false;
+                IsWaitingForContinue = false;
+                ShouldMoveNextLeg = false;
+                legSensorTiggered = false;
+                landigGearLocked = false;
+                IsPacked = false;
+                IsDisabled = false;
+                HasAscended = false;
+            }
+
+            public bool RestartSequence(bool force = false)
+            {
+                if (!SequenceEnded && !force) return false;
+                resetFields();
+                leg.UpperLegPiston.Velocity = 0;
+                leg.LowerLegPiston.Velocity = 0;
+                leg.HipHingeVert.Enabled = true;
+                leg.KneeHinge.Enabled = true;
+                leg.FootHinge.Enabled = true;
+                //leg.HipHingeVert.RotorLock = true;
+                //leg.KneeHinge.RotorLock = true;
+                //leg.FootHinge.RotorLock = true;
+                leg.LegSenor.Enabled = false;
+                shouldContinueFunc = () => true;
+                return true;
+            }
+
+            public bool SwitchDirection(MovementDirection direction)
+            {
+                if (MovementStep > 2) return false;
+                this.direction = direction;
+                //EchoDebug(MovementStep.ToString());
+                RestartSequence(true);
+                return true;
+            }
 
             public void LegSensorTriggredCallback()
             {
                 legSensorTiggered = true;
-                if (direction == MovementDirection.Down)
-                {
-                    leg.HipHingeVert.RotorLock = true;
-                    leg.UpperLegPiston.Enabled = false;
-                }
+                leg.KneeHinge.TargetVelocityRPM = 0;
+                //leg.KneeHinge.RotorLock = true;
+                leg.HipHingeVert.TargetVelocityRPM = 0;
+                //leg.HipHingeVert.RotorLock = true;
+                leg.UpperLegPiston.Velocity = 0;
+                MovementStep = 6;
             }
 
             public void LandingGearLockCallback()
             {
                 landigGearLocked = true;
-                if (direction == MovementDirection.Down)
-                {
-                    leg.LowerLegPiston.Enabled = false;
-                }
+                leg.LowerLegPiston.Velocity = 0;
             }
 
-            // Downwards Movement Handling
-
-            // Delegate should return true when we can continue
-            private Func<bool> MovementDown()
+            private bool CheckLegSensor()
             {
-                switch (MovementStep)
+                if (leg.LegSenor.IsActive && leg.LegSenor.IsWorking)
                 {
-                    // Retract Lower Leg Piston
-                    case 0:
-                        unlockMagnets();
-                        leg.LowerLegPiston.Enabled = true;
-                        leg.LowerLegPiston.Retract();
-                        SequenceInProgress = true;
-                        // wait until Pistion is retracted > 50%
-                        return () => leg.LowerLegPiston.NormalizedPosition < 0.5f;
-
-                    // Retract all Hinges
-                    case 1:
-                        // Rotate HipHinge to 90°
-                        leg.HipHingeVert.Enabled = true;
-                        leg.HipHingeVert.RotorLock = false;
-                        leg.HipHingeVert.TargetVelocityRPM = rotorRPM;
-                        // Rotate KneeHinge to -90°
-                        leg.KneeHinge.Enabled = true;
-                        leg.KneeHinge.RotorLock = false;
-                        leg.KneeHinge.TargetVelocityRPM = -rotorRPM;
-                        // Rotate FootHinge to 0°
-                        leg.FootHinge.Enabled = true;
-                        leg.FootHinge.RotorLock = false;
-                        rotateStatorToAngle(leg.FootHinge, 0);
-                        // Wait for Hinges to reach end Position
-                        return () => AreSimilar(leg.HipHingeVert.Angle, 90) && AreSimilar(leg.KneeHinge.Angle, -90) && AreSimilar(leg.FootHinge.Angle, 0);
-
-                    case 2:
-                        leg.UpperLegPiston.Enabled = true;
-                        leg.UpperLegPiston.Retract();
-                        return () => leg.UpperLegPiston.Status == PistonStatus.Retracted;
-                    // Extend Hip Hinge down until 45°
-                    case 3:
-                        // Reset Foot Hinge limits
-                        leg.FootHinge.TargetVelocityRPM = 0;
-                        leg.FootHinge.UpperLimitDeg = 90;
-                        leg.FootHinge.LowerLimitDeg = -90;
-                        // Rotate Hip Hinge down
-                        //leg.HipHingeVert.LowerLimitDeg = 45;
-                        leg.HipHingeVert.TargetVelocityRPM = -rotorRPM;
-                        leg.LegSenor.Enabled = true;
-                        return () => legSensorTiggered || leg.HipHingeVert.Angle < 45;
-
-                    case 4:
-                        //leg.HipHingeVert.LowerLimitDeg = 0;
-                        leg.UpperLegPiston.Extend();
-                        return () => legSensorTiggered || AreSimilar(leg.HipHingeVert.Angle, 0);
-
-                    case 5:
-                        leg.LowerLegPiston.Enabled = true;
-                        leg.LowerLegPiston.Extend();
-                        return () => landigGearLocked || leg.LowerLegPiston.Status == PistonStatus.Extended;
-
-                    case 6:
-                        ShouldMoveNextLeg = true;
-                        return () => false;
-
-                    case 7:
-                        return MoveCraftDown();
-
-                    case 8:
-                        leg.UpperLegPiston.Velocity = Math.Sign(leg.UpperLegPiston.Velocity) * pistonSpeed;
-                        leg.LowerLegPiston.Velocity = Math.Sign(leg.LowerLegPiston.Velocity) * pistonSpeed;
-                        leg.UpperLegPiston.Enabled = false;
-                        leg.LowerLegPiston.Enabled = false;
-                        leg.HipHingeVert.RotorLock = true;
-                        leg.KneeHinge.RotorLock = true;
-                        leg.FootHinge.RotorLock = true;
-                        legSensorTiggered = false;
-                        ShouldMoveNextLeg = false;
-                        SequenceInProgress = false;
-                        return () => true;
-                    default:
-                        break;
-                }
-                return () => false;
-            }
-
-            private Func<bool> MoveCraftDown()
-            {
-                leg.KneeHinge.Enabled = false;
-                leg.KneeHinge.RotorLock = false;
-                leg.FootHinge.Enabled = false;
-                leg.FootHinge.Enabled = false;
-                if (leg.HipHingeVert.Angle > 67.5) // Mostly Vertical, use only Upper Piston
-                {
-                    leg.UpperLegPiston.Enabled = true;
-                    leg.UpperLegPiston.Extend();
-                    ResetIsPistonStopped();
-                    return () => IsPistonStopped(leg.UpperLegPiston);
-                }
-                else if (leg.HipHingeVert.Angle < 22.5) // Mostly Horizontal, use only Lower Piston
-                {
-                    leg.LowerLegPiston.Enabled = true;
-                    leg.LowerLegPiston.Retract();
-                    ResetIsPistonStopped();
-                    return () => IsPistonStopped(leg.LowerLegPiston);
-                }
-                else // move each piston for smoother movement
-                {
-                    var p = leg.HipHingeVert.Angle / 90;
-                    var upperSpeed = Lerp(0, pistonSpeed, p);
-                    var lowerSpeed = Lerp(0, -pistonSpeed, 1 - p);
-                    leg.UpperLegPiston.Velocity = upperSpeed;
-                    leg.LowerLegPiston.Velocity = lowerSpeed;
-
-                    // Stop when one Piston stopped moving (to be safe against clang)
-                    ResetIsPistonStopped();
-                    return () => IsPistonStopped(leg.UpperLegPiston) || IsPistonStopped(leg.LowerLegPiston);
-                }
-            }
-
-            // Helper Functions
-
-            private void rotateStatorToAngle(IMyMotorStator stator, float angle)
-            {
-                var sign = Math.Sign(DegreesToRadians(angle) - stator.Angle);
-                stator.TargetVelocityRPM = sign * -rotorRPM;
-                if (sign < 0)
-                {
-                    stator.UpperLimitRad = angle;
-                }
-                else
-                {
-                    stator.LowerLimitRad = angle;
-                }
-            }
-
-            private void unlockMagnets()
-            {
-                foreach (var gear in leg.LegMagnets)
-                {
-                    gear.Unlock();
-                    gear.ResetAutoLock();
-                }
-                landigGearLocked = false;
-            }
-
-            private float upperLegLastChange = 0;
-            private bool upperLegChangeInit = false;
-            private float lowerLegLastChange = 0;
-            private bool lowerLegChangeInit = false;
-            private void ResetIsPistonStopped()
-            {
-                upperLegLastChange = 0;
-                upperLegChangeInit = false;
-                lowerLegLastChange = 0;
-                lowerLegChangeInit = false;
-            }
-            private bool IsPistonStopped(IMyPistonBase piston)
-            {
-                const float error = 0.005f;
-                if (piston == leg.UpperLegPiston)
-                {
-                    if (leg.UpperLegPiston.Status != PistonStatus.Extending && leg.UpperLegPiston.Status != PistonStatus.Retracting) { upperLegLastChange = 0; return true; }
-                    upperLegLastChange = Math.Abs(0 - leg.UpperLegPiston.NormalizedPosition);
-                    if (AreSimilar(upperLegLastChange, 0, error) && upperLegChangeInit) { upperLegLastChange = 0; upperLegChangeInit = false; return true; }
-                    upperLegChangeInit = true;
-                }
-                else
-                {
-                    if (leg.LowerLegPiston.Status != PistonStatus.Extending && leg.LowerLegPiston.Status != PistonStatus.Retracting) { lowerLegLastChange = 0; return true; }
-                    lowerLegLastChange = Math.Abs(0 - leg.LowerLegPiston.NormalizedPosition);
-                    if (AreSimilar(lowerLegLastChange, 0, error) && lowerLegChangeInit) { lowerLegLastChange = 0; lowerLegChangeInit = false; return true; }
-                    lowerLegChangeInit = true;
+                    LegSensorTriggredCallback();
+                    return true;
                 }
                 return false;
             }
 
-            private float Lerp(float from, float to, float by)
+            private bool CheckMagnetLocked()
             {
-                return from * (1 - by) + to * by;
+                foreach (var gear in leg.LegMagnets)
+                {
+                    if (gear.IsLocked && gear.IsWorking)
+                    {
+                        LandingGearLockCallback();
+                        return true;
+                    }
+                }
+                return false;
             }
 
-            private static float DegreesToRadians(float angle) => angle * ((float)Math.PI / 180.0f);
+            // Shared movement steps for up & down
+            private Func<bool> RunSequenceStep()
+            {
+                const float retMult = 2f;
+                switch (MovementStep)
+                {
+                    // Retract Lower Leg Piston
+                    case 0:
+                        SequenceInProgress = true;
+                        ChangeMagnetAutoLock(false);
+                        UnlockMagnets();
+                        // Retract LowerLeg Piston
+                        leg.LowerLegPiston.Velocity = -pistonSpeed * retMult; // = leg.LowerLegPiston.Retract();
+                        // Unlock Rotor lock 1 step before to avoid a bug
+                        leg.HipHingeVert.RotorLock = false;
+                        leg.KneeHinge.RotorLock = false;
+                        leg.FootHinge.RotorLock = false;
+                        return () =>
+                        {
+                            //UnlockMagnets();
+                            return leg.LowerLegPiston.Status == PistonStatus.Retracted;
+                        };
+
+                    // Retract all Hinges
+                    case 1:
+                        const float hipHingeAngle = 90f;
+                        const float kneeHineAngle = -35f;
+                        const float footHingeAngle = 0f;
+                        UnlockMagnets();
+                        // Rotate HipHinge to 90°
+                        leg.HipHingeVert.Enabled = true;
+                        leg.HipHingeVert.TargetVelocityRPM = rotorRPM * retMult;
+                        // Rotate KneeHinge to -45°
+                        leg.KneeHinge.Enabled = true;
+                        //leg.KneeHinge.TargetVelocityRPM = -rotorRPM;
+                        RotorTools.RotateToDeg(leg.KneeHinge, kneeHineAngle, rotorRPM * retMult);
+                        // Rotate FootHinge to 0°
+                        leg.FootHinge.Enabled = true;
+                        RotorTools.RotateToDeg(leg.FootHinge, 0, rotorRPM * retMult);
+                        // Slowly retract Upper Leg piston
+                        leg.UpperLegPiston.Velocity = -0.075f; // = leg.UpperLegPiston.Retract();
+                        // Wait for Hinges to reach end Position
+                        return () =>
+                        {
+                            //UnlockMagnets();
+                            return RotorTools.IsRotorAtAngle(leg.HipHingeVert, hipHingeAngle)
+                            && RotorTools.IsRotorAtAngle(leg.KneeHinge, kneeHineAngle)
+                            && RotorTools.IsRotorAtAngle(leg.FootHinge, footHingeAngle);
+                        };
+
+                    // Extend or Retract Upper Leg piston baseed on movement direction
+                    case 2:
+                        if (direction == MovementDirection.Down)
+                        {
+                            leg.UpperLegPiston.Velocity = -pistonSpeed * retMult; // = leg.UpperLegPiston.Retract();
+                            return () => leg.UpperLegPiston.Status == PistonStatus.Retracted;
+                        }
+                        else
+                        {
+                            leg.UpperLegPiston.Velocity = pistonSpeed * retMult; // = leg.UpperLegPiston.Extend();
+                            return () => leg.UpperLegPiston.Status == PistonStatus.Extended;
+                        }
+                    // Move Knee down until detecting a wall or reaching end
+                    case 3:
+                        leg.LegSenor.Enabled = true;
+                        leg.KneeHinge.LowerLimitDeg = -90;
+                        leg.KneeHinge.UpperLimitDeg = 0f;
+                        leg.KneeHinge.TargetVelocityRPM = -rotorRPM;
+                        // Reset Foot Hinge limits
+                        leg.FootHinge.TargetVelocityRPM = 0;
+                        leg.FootHinge.UpperLimitDeg = 90;
+                        leg.FootHinge.LowerLimitDeg = -90;
+
+                        return () => CheckLegSensor() || RotorTools.IsRotorAtAngle(leg.KneeHinge, -90f);
+
+                    // Extend Hip Hinge down until 45°
+                    case 4:
+                        // Rotate Hip Hinge down
+                        leg.HipHingeVert.TargetVelocityRPM = -rotorRPM;
+                        return () => CheckLegSensor() || leg.HipHingeVert.Angle < DegreesToRadians(52);
+                    case 5:
+                        if(direction == MovementDirection.Down)
+                        {
+                            leg.UpperLegPiston.Velocity = pistonSpeed; // = leg.UpperLegPiston.Extend();
+                            return () => CheckLegSensor() || RotorTools.IsRotorAtAngle(leg.HipHingeVert, 0);
+                        }
+                        else
+                        {
+                            return () => CheckLegSensor() || RotorTools.IsRotorAtAngle(leg.HipHingeVert, 0);
+                        }
+
+                    case 6:
+                        ChangeMagnetAutoLock(true);
+                        leg.LegSenor.Enabled = false;
+                        leg.LowerLegPiston.Velocity = pistonSpeed; // = leg.LowerLegPiston.Extend();
+                        return () => CheckMagnetLocked() || leg.LowerLegPiston.Status == PistonStatus.Extended;
+
+                    case 7:
+                        ShouldMoveNextLeg = true;
+                        IsWaitingForContinue = true;
+                        return () => false;
+
+                    case 8:
+                        IsWaitingForContinue = false;
+                        ResetIsPistonStopped();
+                        if (direction == MovementDirection.Down)
+                        {
+                            return MoveCraftDown();
+                        }
+                        else
+                        {
+                            return MoveCraftUp();
+                        }
+
+                    case 9:
+                        leg.LowerLegPiston.Velocity = 0;
+                        leg.UpperLegPiston.Velocity = 0;
+                        leg.HipHingeVert.Enabled = true;
+                        leg.HipHingeVert.TargetVelocityRad = 0;
+                        leg.KneeHinge.Enabled = true;
+                        leg.KneeHinge.TargetVelocityRad = 0;
+                        leg.FootHinge.Enabled = true;
+                        leg.FootHinge.TargetVelocityRad = 0;
+                        SequenceInProgress = false;
+                        SequenceEnded = true;
+                        if(direction == MovementDirection.Up && leg.HipHingeVert.Angle < DegreesToRadians(15)) { HasAscended = true; }
+                        return () => false;
+
+                    default:
+                        return () => false;
+                }
+            }
+
+            // Downwards Movement Handling
+            #region Downwards Movement
+            
+            private Func<bool> MoveCraftDown()
+            {
+                leg.HipHingeVert.Enabled = false;
+                leg.HipHingeVert.RotorLock = false;
+                leg.KneeHinge.Enabled = false;
+                leg.KneeHinge.RotorLock = false;
+                leg.FootHinge.Enabled = false;
+                leg.FootHinge.RotorLock = false;
+                if (leg.HipHingeVert.Angle > DegreesToRadians(65)) // Mostly Vertical, use only Upper Piston
+                {
+                    leg.UpperLegPiston.Velocity = pistonSpeed; // = leg.UpperLegPiston.Extend();
+                    return () => IsPistonStopped(leg.UpperLegPiston);
+                }
+                else if (leg.HipHingeVert.Angle < DegreesToRadians(25)) // Mostly Horizontal, use only Lower Piston
+                {
+                    leg.LowerLegPiston.Velocity = -pistonSpeed; // = leg.LowerLegPiston.Retract();
+                    return () => IsPistonStopped(leg.LowerLegPiston);
+                }
+                else // move each piston for smoother movement
+                {
+                    var p = leg.HipHingeVert.Angle / DegreesToRadians(90); // calculate % Angle
+                    var upperSpeed = Lerp(0, pistonSpeed, p);
+                    var lowerSpeed = Lerp(0, -pistonSpeed, 1 - p);
+                    leg.UpperLegPiston.Velocity = upperSpeed;
+                    leg.LowerLegPiston.Velocity = lowerSpeed;
+                    IMyPistonBase pStop = leg.LowerLegPiston;
+                    if (p > 0.5)
+                    {
+                        pStop = leg.UpperLegPiston;
+                    }
+
+                    // Stop when one Piston stopped moving (to be safe against clang)
+                    //return () => IsPistonStopped(leg.UpperLegPiston) && IsPistonStopped(leg.LowerLegPiston);
+                    return () =>
+                    {
+                        return leg.UpperLegPiston.NormalizedPosition > p
+                        && leg.LowerLegPiston.NormalizedPosition < 1 - p
+                        && IsPistonStopped(pStop);
+                    };
+                }
+            }
+            #endregion
+
+            #region Upwards Movement
+            private Func<bool> MoveCraftUp()
+            {
+                
+                leg.HipHingeVert.RotorLock = false;
+                leg.KneeHinge.RotorLock = false;
+                leg.FootHinge.Enabled = false;
+                leg.FootHinge.RotorLock = false;
+                leg.FootHinge.UpperLimitDeg = 35;
+                leg.FootHinge.LowerLimitDeg = -35;
+                if (leg.HipHingeVert.Angle > DegreesToRadians(65)) // Mostly Vertical, use only Upper Piston
+                {
+                    leg.HipHingeVert.Enabled = false;
+                    leg.KneeHinge.Enabled = false;
+                    leg.UpperLegPiston.Enabled = true;
+                    leg.UpperLegPiston.Velocity = -pistonSpeed; // = leg.UpperLegPiston.Retract();
+                    return () => IsPistonStopped(leg.UpperLegPiston);
+                }
+                else if (leg.HipHingeVert.Angle < DegreesToRadians(30)) // Mostly Horizontal, Ascend should be done
+                {
+                    leg.HipHingeVert.Enabled = true;
+                    leg.KneeHinge.Enabled = true;
+                    leg.LowerLegPiston.Enabled = true;
+                    leg.LowerLegPiston.Velocity = pistonSpeed; // = leg.LowerLegPiston.Extend();
+                    leg.HipHingeVert.TargetVelocityRPM = -rotorRPM;
+                    return () => (leg.HipHingeVert.Angle < DegreesToRadians(15) && IsPistonStopped(leg.LowerLegPiston));
+                }
+                else // move each piston for smoother movement
+                {
+                    leg.UpperLegPiston.Enabled = true;
+                    leg.LowerLegPiston.Enabled = true;
+                    leg.HipHingeVert.Enabled = true;
+                    leg.KneeHinge.Enabled = true;
+                    var p = leg.HipHingeVert.Angle / DegreesToRadians(90);
+                    var upperSpeed = Lerp(0, -pistonSpeed, p);
+                    var lowerSpeed = Lerp(0, pistonSpeed, 1 - p);
+                    leg.UpperLegPiston.Velocity = upperSpeed;
+                    leg.LowerLegPiston.Velocity = lowerSpeed;
+                    leg.HipHingeVert.TargetVelocityRPM = -rotorRPM;
+                    IMyPistonBase pStop = leg.LowerLegPiston;
+                    if (p > 0.5)
+                    {
+                        pStop = leg.UpperLegPiston;
+                    }
+                    // Stop when one Piston stopped moving (to be safe against clang)
+                    return () =>
+                    {
+                        return (leg.UpperLegPiston.NormalizedPosition < p
+                        && leg.LowerLegPiston.NormalizedPosition > 1 - p)
+                        && IsPistonStopped(pStop);
+                    };
+                }
+            }
+            #endregion
+
+            // Helper Functions
+
+            private void UnlockMagnets()
+            {
+                foreach (var gear in leg.LegMagnets)
+                {
+                    gear.Unlock();
+                }
+                landigGearLocked = false;
+            }
+            private void ChangeMagnetAutoLock(bool status)
+            {
+                foreach (var gear in leg.LegMagnets)
+                {
+                    gear.AutoLock = status;
+                }
+            }
+            private void ToggleMagnets(bool status)
+            {
+                foreach (var gear in leg.LegMagnets)
+                {
+                    gear.Enabled = status;
+                }
+            }
+
+            private float upperLegLastPos = -1;
+            private float lowerLegLastPos = -1;
+            private void ResetIsPistonStopped()
+            {
+                upperLegLastPos = -1;
+                lowerLegLastPos = -1;
+            }
+            private bool IsPistonStopped(IMyPistonBase piston)
+            {
+                const float error = 0.0005f;
+                float delta;
+                if (piston == leg.UpperLegPiston)
+                {
+                    if (!(leg.UpperLegPiston.Status == PistonStatus.Extending || leg.UpperLegPiston.Status == PistonStatus.Retracting)) { upperLegLastPos = -1; return true; }
+                    delta = Math.Abs(upperLegLastPos - leg.UpperLegPiston.NormalizedPosition);
+                    //EchoDebug("IsPistonStopped delta:" + delta.ToString());
+                    if (AreSimilar(delta, 0, error)) { upperLegLastPos = -1; return true; }
+                    upperLegLastPos = leg.UpperLegPiston.NormalizedPosition;
+                }
+                else
+                {
+                    if (!(leg.LowerLegPiston.Status == PistonStatus.Extending || leg.LowerLegPiston.Status == PistonStatus.Retracting)) { lowerLegLastPos = -1; return true; }
+                    delta = Math.Abs(lowerLegLastPos - leg.LowerLegPiston.NormalizedPosition);
+                    //EchoDebug("IsPistonStopped delta:" + delta.ToString());
+                    if (AreSimilar(delta, 0, error)) { lowerLegLastPos = -1; return true; }
+                    lowerLegLastPos = leg.LowerLegPiston.NormalizedPosition;
+                }
+                return false;
+            }
+
         }
     }
 }
