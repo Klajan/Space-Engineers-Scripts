@@ -6,6 +6,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.ComponentModel;
 using System.Globalization;
 using System.Linq;
 using System.Security.Cryptography;
@@ -27,9 +28,8 @@ namespace IngameScript
         public interface ISaveable
         {
             bool ShouldSerialize();
-            string Serialize();
-            // Serialize float with .ToString("G9") and double with .ToString("G17")
-            bool Deserialize(string dataString);
+            byte[] Serialize();
+            bool Deserialize(byte[] data);
         }
 
         public class PersistantStorage
@@ -50,58 +50,49 @@ namespace IngameScript
                 storables.Add(saveable);
             }
 
-            public string SerializeAll()
+            public string SerializeAll(bool forceSave = false)
             {
                 List<string> data = new List<string>(storables.Count);
-                StringBuilder sb = new StringBuilder();
-                for (int i = 0; i < storables.Count; i++)
+                for (ushort i = 0; i < storables.Count; i++)
                 {
-                    sb.Clear();
-                    if (!storables[i].ShouldSerialize()) continue;
-                    // base64 Encode String to mask potential conflicting sperators
-                    // var base64Str = Convert.ToBase64String(Encoding.Unicode.GetBytes(storables[i].Serialize()));
-                    sb.Append(i);
-                    sb.Append(seperator);
-                    sb.Append(Convert.ToBase64String(Encoding.Unicode.GetBytes(storables[i].Serialize())));
-                    // Calculate CRC16
-                    var bytes = Encoding.Unicode.GetBytes(sb.ToString());
-                    ushort crc = calcCRC16(bytes);
-                    sb.Append(seperator);
-                    sb.Append(crc);
-                    //serialString += seperator + crc.ToString("x4");
-                    var str = sb.ToString();
-                    _program.Echo(str);
-                    data.Add(str);
+                    if (!forceSave && !storables[i].ShouldSerialize()) continue;
+                    // base64 Encode bytes
+                    var serialData = storables[i].Serialize();
+                    // Calculate CRC16 & XOR with index
+                    ushort crc = (ushort)(calcCRC16(serialData) ^ i);
+                    string output = i.ToString() + seperator + Convert.ToBase64String(serialData) + seperator + crc.ToString();
+                    data.Add(output);
                 }
+                if (data.Count == 0) return string.Empty;
                 return string.Join(itemSeperator.ToString(), data);
             }
 
             public bool DeserializeAll(string storageString)
             {
                 bool success = true;
+                if (storageString == null) return true;
                 var items = storageString.Split(itemSeperator);
                 foreach (var item in items)
                 {
+                    EchoDebug(item);
                     var split = item.Split(seperator);
                     if (split.Length != 3) { _program.Echo("Can't split Message"); return false; } // Could not split message
                     // Check CRC16
-                    ushort crc = calcCRC16(Encoding.Unicode.GetBytes(split[0] + seperator + split[1]));
+                    ushort index;
+                    if(!ushort.TryParse(split[0], out index) && index >= storables.Count) { _program.Echo("Invalid Message (index invalid our out of bounds)"); return false; }
+                    byte[] serialData = Convert.FromBase64String(split[1]);
+
+                    ushort crc = (ushort)(calcCRC16(serialData) ^ index);
                     ushort strCrc = ushort.Parse(split[2]);
                     if (strCrc != crc) { _program.Echo("Invalid Checksum"); return false; }
-                    // Get Index for registred ISavable
-                    int index = int.Parse(split[0]);
-                    if (index >= storables.Count) return false;
                     // Decode base64 String and Deserialize
-                    var baseStr = Encoding.Unicode.GetString(Convert.FromBase64String(split[1]));
-                    success &= storables[index].Deserialize(baseStr);
+                    success &= storables[index].Deserialize(serialData);
                 }
                 return success;
             }
 
             public static ushort calcCRC16(byte[] data, int offset, int length)
             {
-                const ushort h1 = 0x8000;
-                const ushort h2 = 0x1021;
                 ushort wData, wCRC = 0;
                 int end = offset + length;
                 if (!(offset + end <= data.Length)) throw new InvalidOperationException();
@@ -110,10 +101,10 @@ namespace IngameScript
                     wData = Convert.ToUInt16(data[i] << 8);
                     for (int j = 0; j < 8; j++, wData <<= 1)
                     {
-                        ushort a = (ushort)((wCRC ^ wData) & h1);
+                        ushort a = (ushort)((wCRC ^ wData) & 0x8000);
                         if (a != 0)
                         {
-                            wCRC = (ushort)((wCRC << (ushort)1u) ^ h2);
+                            wCRC = (ushort)((wCRC << (ushort)1u) ^ 0x1021);
                         }
                         else
                         {
