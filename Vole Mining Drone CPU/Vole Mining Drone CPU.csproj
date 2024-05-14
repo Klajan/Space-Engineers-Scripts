@@ -41,6 +41,7 @@
   <Import Project="MDK/MDK.options.props" />
   <Import Project="MDK/MDK.paths.props" Condition="exists('MDK/MDK.paths.props')" />
   <ItemGroup>
+    <Compile Include="SimpleMovingAverage.cs" />
     <Compile Include="DrillController.cs" />
     <Compile Include="DrillDefinition.cs" />
     <Compile Include="LegMovementController.cs" />
@@ -57,7 +58,9 @@
     <AdditionalFiles Include="Instructions.readme" />
     <AdditionalFiles Include="thumb.png" />
     <AdditionalFiles Include="MDK\whitelist.cache" />
+    <Compile Include="RotorTools.cs" />
     <Compile Include="SequenceController.cs" />
+    <Compile Include="StorageMonitor.cs" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="Notes.txt" />
