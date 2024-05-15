@@ -174,12 +174,16 @@ namespace IngameScript
             else if ((updateSource & UpdateType.Update100) != 0)
             {
                 _inventoryFull = storageMonitor.CheckInventoryFull();
+                sequenceController.EjectableCargoFraction = storageMonitor.GetBlacklistCargoFraction();
+                sequenceController.EjectableCargoVolumeFillFactor = storageMonitor.GetBlacklistVolumeFillFactor();
+                Echo($"EjectableCargoFraction: {sequenceController.EjectableCargoFraction}");
+                Echo($"EjectableCargoVolumeFillFactor: {sequenceController.EjectableCargoVolumeFillFactor}");
                 if (_inventoryFull)
                 {
                     Echo("Inventory full!");
                 }
-                Echo($"Last RunTime: {this.Runtime.LastRunTimeMs}ms");
-                Echo($"Average RunTime: {runtimeAvg.Update(this.Runtime.LastRunTimeMs)}ms");
+                //Echo($"Last RunTime: {this.Runtime.LastRunTimeMs}ms");
+                //Echo($"Average RunTime: {runtimeAvg.Update(this.Runtime.LastRunTimeMs)}ms");
             }
         }
 

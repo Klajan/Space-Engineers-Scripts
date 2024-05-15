@@ -28,7 +28,10 @@ namespace IngameScript
             private Func<bool> shouldContinueFunc = () => true;
             private float drillingSpeed;
             private float drillingRpm;
+            private float drillingSpeedSlow;
             private const float returnSpeed = 1.0f;
+            private uint periodicCheck = 0;
+            private const float slowSpeedThreshold = 0.6f;
 
             #region SaveOnExitVariables
             private int SequenceStep = 0;
@@ -41,6 +44,7 @@ namespace IngameScript
             {
                 this.DrillDef = drill;
                 this.drillingSpeed = drillingSpeed;
+                this.drillingSpeedSlow = drillingSpeed / 3;
                 this.drillingRpm = drillingRpm;
             }
 
@@ -80,6 +84,19 @@ namespace IngameScript
 
             public bool TryNextStep()
             {
+                if(SequenceStep < 3 && periodicCheck++ >= 20)
+                {
+                    EchoDebug($"Percent Filled: {CheckCargoFillPercent()}");
+                    periodicCheck = 0;
+                    if (CheckCargoFillPercent() < slowSpeedThreshold)
+                    {
+                        DrillDef.Piston.Velocity = drillingSpeed;
+                    }
+                    else
+                    {
+                        DrillDef.Piston.Velocity = drillingSpeedSlow;
+                    }
+                }
                 if (!shouldContinueFunc()) return false;
                 shouldContinueFunc = RunSequence();
                 SequenceStep++;
@@ -97,6 +114,7 @@ namespace IngameScript
                 DrillDef.Piston.Velocity = returnSpeed;
                 DrillDef.Piston.Enabled = true;
                 DrillDef.Piston.Retract();
+                SequenceStep = 0;
             }
 
             public void Unpack()
@@ -105,6 +123,7 @@ namespace IngameScript
                 DrillDef.Motor.TargetVelocityRPM = 0;
                 DrillDef.Motor.UpperLimitRad = float.MaxValue;
                 DrillDef.Motor.LowerLimitDeg = float.MinValue;
+                SequenceStep = 0;
             }
 
             #endregion
@@ -125,7 +144,6 @@ namespace IngameScript
                         //EchoDebug("Case 1");
                         DrillDef.Piston.Enabled = true;
                         DrillDef.Piston.Velocity = drillingSpeed;
-                        DrillDef.Piston.Extend();
                         return () => { return DrillDef.Piston.Status == PistonStatus.Extended; };
                     case 2:
                         //EchoDebug("Case 2");
@@ -133,8 +151,7 @@ namespace IngameScript
                     case 3:
                         foreach (var drill in DrillDef.ShipDrills) { drill.Enabled = false; }
                         DrillDef.Motor.TargetVelocityRPM = 0;
-                        DrillDef.Piston.Velocity = returnSpeed;
-                        DrillDef.Piston.Retract();
+                        DrillDef.Piston.Velocity = -returnSpeed;
                         return () => { return DrillDef.Piston.Status == PistonStatus.Retracted; };
                     case 4:
                         SequenceStep = -1;
@@ -155,6 +172,18 @@ namespace IngameScript
                     return true;
                 }
                 return false;
+            }
+
+            private List<IMyInventory> _cachedCargo;
+            private float CheckCargoFillPercent()
+            {
+                if( _cachedCargo == null ) { _cachedCargo = DrillDef.GetDrillInventories().ToList(); }
+                float perc = 0;
+                foreach (var inv in _cachedCargo)
+                {
+                    perc += inv.VolumeFillFactor;
+                }
+                return perc / _cachedCargo.Count;
             }
         }
     }

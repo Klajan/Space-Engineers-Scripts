@@ -27,8 +27,12 @@ namespace IngameScript
         {
             private List<IMyInventory> inventories = new List<IMyInventory>();
             private HashSet<MyItemType> itemBlackList = new HashSet<MyItemType>();
-            private MyFixedPoint totalVolume = new MyFixedPoint();
-            private double blacklistAllowedPercent;
+            private float blacklistAllowedPercent;
+            private const float cargoFilledPercent = 0.9f;
+
+            public MyFixedPoint TotalVolume { get; private set; } = new MyFixedPoint();
+            public MyFixedPoint CurrentVolume { get; private set; } = new MyFixedPoint();
+            public MyFixedPoint BlacklistVolume { get; private set; } = new MyFixedPoint();
 
             private const float oreVolumePerKilo = 0.00037f; // kg/m³
             public static readonly MyItemType _stone = MyItemType.MakeOre("Stone");
@@ -37,7 +41,7 @@ namespace IngameScript
             #region SaveOnExitVariables
             #endregion
 
-            public StorageMonitor(IEnumerable<IMyCargoContainer> cargoContainers, double blacklistAllowedPercent = 0.10, IEnumerable<MyItemType> itemBlackList = null)
+            public StorageMonitor(IEnumerable<IMyCargoContainer> cargoContainers, float blacklistAllowedPercent = 0.10f, IEnumerable<MyItemType> itemBlackList = null)
             {
                 this.blacklistAllowedPercent = blacklistAllowedPercent;
                 if (itemBlackList == null)
@@ -55,7 +59,7 @@ namespace IngameScript
                 foreach (var cargo in cargoContainers)
                 {
                     inventories.Add(cargo.GetInventory());
-                    totalVolume += cargo.GetInventory().MaxVolume;
+                    TotalVolume += cargo.GetInventory().MaxVolume;
                 }
             }
 
@@ -83,6 +87,7 @@ namespace IngameScript
                 foreach (var item in inventories)
                 {
                     this.inventories.Add(item);
+                    TotalVolume += item.MaxVolume;
                 }
             }
 
@@ -94,24 +99,31 @@ namespace IngameScript
                 }
             }
 
+            public float GetBlacklistVolumeFillFactor()
+            {
+                return (float)BlacklistVolume / (float)TotalVolume;
+            }
+
+            public float GetBlacklistCargoFraction()
+            {
+                return CurrentVolume != 0 ? (float)BlacklistVolume / (float)CurrentVolume : 0;
+            }
+
             public bool CheckInventoryFull()
             {
-                var isFull = true;
-                MyFixedPoint currentVolume = new MyFixedPoint();
-                MyFixedPoint blacklistAmount = new MyFixedPoint();
+                CurrentVolume = 0;
+                BlacklistVolume = 0;
                 foreach (var item in inventories)
                 {
-                    isFull &= item.IsFull;
-                    currentVolume += item.CurrentVolume;
+                    CurrentVolume += item.CurrentVolume;
                     foreach (var ban in itemBlackList)
                     {
-                        blacklistAmount += item.GetItemAmount(ban);
+                        BlacklistVolume += MyFixedPoint.MultiplySafe(item.GetItemAmount(ban), oreVolumePerKilo);
                     }
                 }
-                if(isFull)
+                if(((float)CurrentVolume / (float)TotalVolume) >= cargoFilledPercent)
                 {
-                    blacklistAmount = MyFixedPoint.MultiplySafe(blacklistAmount, oreVolumePerKilo);
-                    return ((double)blacklistAmount / (double)totalVolume) <= blacklistAllowedPercent;
+                    return ((float)BlacklistVolume / (float)CurrentVolume) <= blacklistAllowedPercent;
                 }
                 return false;
             }
