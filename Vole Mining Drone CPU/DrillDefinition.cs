@@ -38,6 +38,7 @@ namespace IngameScript
             }
             public IMyPistonBase Piston { get; private set; }
             public IMyMotorStator Motor {  get; private set; }
+            public IMySensorBlock Sensor { get; private set; }
 
             public bool IsInitialized { get; private set; }
 
@@ -51,7 +52,7 @@ namespace IngameScript
                 return drillInv;
             }
 
-            public static DrillDefinition CreateFromLists(Program program, List<IMyMotorStator> statorList, List<IMyPistonBase> pistonList, List<IMyShipDrill> drillList, List<IMyShipConnector> connectorList)
+            public static DrillDefinition CreateFromLists(Program program, List<IMyMotorStator> statorList, List<IMyPistonBase> pistonList, List<IMyShipDrill> drillList, List<IMyShipConnector> connectorList, List<IMySensorBlock> sensorList)
             {
                 DrillDefinition drill = new DrillDefinition
                 {
@@ -81,9 +82,16 @@ namespace IngameScript
                     program.Echo($"Could not initalize EjectorConnectors, no CustomData 'EjectorConnector' found!");
                     drill.IsInitialized = false;
                 }
-                
+                IMySensorBlock mySensor = sensorList.Find(sensor => sensor.CustomData.Contains("DrillSensor"));
+                if (myPiston == null)
+                {
+                    program.Echo("Could not initalize DrillSensor, no CustomData 'DrillSensor' found!");
+                    drill.IsInitialized = false;
+                }
+
                 drill.Piston = myPiston;
                 drill.Motor = myMotor;
+                drill.Sensor = mySensor;
                 drill._shipDrills = myShipDrills;
                 drill._drillConnectors = myShipConnectors;
                 return drill;
