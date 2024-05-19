@@ -30,13 +30,14 @@ namespace IngameScript
             bool ShouldSerialize();
             byte[] Serialize();
             bool Deserialize(byte[] data);
+            ushort Salt { get; }
         }
 
         public class PersistantStorage
         {
 
             private readonly Program _program;
-            private readonly List<ISaveable> storables = new List<ISaveable>();
+            private readonly List<ISaveable> ISaveableList = new List<ISaveable>();
             const char seperator = '\u0092';
             const char itemSeperator = '\n';
 
@@ -47,19 +48,19 @@ namespace IngameScript
 
             public void Register(ISaveable saveable)
             {
-                storables.Add(saveable);
+                ISaveableList.Add(saveable);
             }
 
             public string SerializeAll(bool forceSave = false)
             {
-                List<string> data = new List<string>(storables.Count);
-                for (ushort i = 0; i < storables.Count; i++)
+                List<string> data = new List<string>(ISaveableList.Count);
+                for (ushort i = 0; i < ISaveableList.Count; i++)
                 {
-                    if (!forceSave && !storables[i].ShouldSerialize()) continue;
+                    if (!forceSave && !ISaveableList[i].ShouldSerialize()) continue;
                     // base64 Encode bytes
-                    var serialData = storables[i].Serialize();
+                    var serialData = ISaveableList[i].Serialize();
                     // Calculate CRC16 & XOR with index
-                    ushort crc = (ushort)(calcCRC16(serialData) ^ i);
+                    ushort crc = (ushort)(CalcCRC16(serialData) ^ i ^ ISaveableList[i].Salt);
                     string output = i.ToString() + seperator + Convert.ToBase64String(serialData) + seperator + crc.ToString();
                     data.Add(output);
                 }
@@ -74,24 +75,23 @@ namespace IngameScript
                 var items = storageString.Split(itemSeperator);
                 foreach (var item in items)
                 {
-                    EchoDebug(item);
                     var split = item.Split(seperator);
                     if (split.Length != 3) { _program.Echo("Can't split Message"); return false; } // Could not split message
                     // Check CRC16
                     ushort index;
-                    if(!ushort.TryParse(split[0], out index) && index >= storables.Count) { _program.Echo("Invalid Message (index invalid our out of bounds)"); return false; }
+                    if(!ushort.TryParse(split[0], out index) && index >= ISaveableList.Count) { _program.Echo("Invalid Message (index invalid our out of bounds)"); return false; }
                     byte[] serialData = Convert.FromBase64String(split[1]);
 
-                    ushort crc = (ushort)(calcCRC16(serialData) ^ index);
+                    ushort crc = (ushort)(CalcCRC16(serialData) ^ index ^ ISaveableList[index].Salt);
                     ushort strCrc = ushort.Parse(split[2]);
                     if (strCrc != crc) { _program.Echo("Invalid Checksum"); return false; }
                     // Decode base64 String and Deserialize
-                    success &= storables[index].Deserialize(serialData);
+                    success &= ISaveableList[index].Deserialize(serialData);
                 }
                 return success;
             }
 
-            public static ushort calcCRC16(byte[] data, int offset, int length)
+            public static ushort CalcCRC16(byte[] data, int offset, int length)
             {
                 ushort wData, wCRC = 0;
                 int end = offset + length;
@@ -115,9 +115,9 @@ namespace IngameScript
                 return wCRC;
             }
 
-            public static ushort calcCRC16(byte[] data)
+            public static ushort CalcCRC16(byte[] data)
             {
-                return calcCRC16(data, 0, data.Length);
+                return CalcCRC16(data, 0, data.Length);
             }
         }
     }
