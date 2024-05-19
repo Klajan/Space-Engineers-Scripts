@@ -27,7 +27,6 @@ namespace IngameScript
     {
         internal interface ISequence
         {
-            UpdateFrequency MyUpdateFrequency { get; }
             bool TryNextStep();
             void Pack();
             void Unpack();
@@ -35,35 +34,38 @@ namespace IngameScript
         public enum MovementDirection : int { Down, Up }
         public class SequenceController : ISequence, ISaveable
         {
-            private Program _program;
             private List<LegMovementController> LegMovementControllers = new List<LegMovementController>();
-            private DrillController DrillController; private Func<bool> _shouldContinueFunc = () => true;
+            private DrillController DrillController; private Func<bool> shouldContinueFunc = () => true;
 
             #region SaveOnExitVariables     
             public MovementDirection Direction { get; private set; } = MovementDirection.Down;
+            public MovementDirection RequestedDirection { get; private set; } = MovementDirection.Down;
             public int SequenceStep { get; private set; } = 0;
             public bool SequenceInProgress { get; private set; } = false;
             private bool waitingForSequence = false;
             public bool IsPacked { get; private set; } = true;
             private int lmcIndex = 0; // Rolling start index of for the LegMovementControllers, should reduce direction bias by alternating starting leg
             public bool IsRunning { get; private set; } = false;
+            public bool SequenceEnded { get; private set; } = false;
             #endregion
 
-            private MovementDirection cachedDirection = MovementDirection.Down;
             public float EjectableCargoVolumeFillFactor { get; set; } = 0;
             public float EjectableCargoFraction { get; set; } = 0;
 
             #region ISaveable      
-            private const int minDataLength = sizeof(int) * 3 + sizeof(bool) * 4;
+            private const int minDataLength = sizeof(int) * 4 + sizeof(bool) * 5;
+            public ushort Salt { get { return 0x1004; } }
             public byte[] Serialize()
             {
                 byte[] data = BitConverter.GetBytes((int)Direction)
+                    .Concat(BitConverter.GetBytes((int)RequestedDirection))
                     .Concat(BitConverter.GetBytes(SequenceStep))
                     .Concat(BitConverter.GetBytes(SequenceInProgress))
                     .Concat(BitConverter.GetBytes(waitingForSequence))
                     .Concat(BitConverter.GetBytes(IsPacked))
                     .Concat(BitConverter.GetBytes(lmcIndex))
                     .Concat(BitConverter.GetBytes(IsRunning))
+                    .Concat(BitConverter.GetBytes(SequenceEnded))
                     .ToArray();
                 return data;
             }
@@ -73,15 +75,23 @@ namespace IngameScript
                 int index = 0;
                 Direction = (MovementDirection)BitConverter.ToInt32(data, index);
                 index += sizeof(int);
+                RequestedDirection = (MovementDirection)BitConverter.ToInt32(data, index);
+                index += sizeof(int);
                 SequenceStep = BitConverter.ToInt32(data, index);
                 index += sizeof(int);
                 SequenceInProgress = BitConverter.ToBoolean(data, index);
-                index += sizeof(bool); waitingForSequence = BitConverter.ToBoolean(data, index);
-                index += sizeof(bool); IsPacked = BitConverter.ToBoolean(data, index);
-                index += sizeof(bool); lmcIndex = BitConverter.ToInt32(data, index);
-                index += sizeof(int); IsRunning = BitConverter.ToBoolean(data, index);
-                index += sizeof(bool); if (!waitingForSequence && SequenceStep > 0) SequenceStep--; // We were not waiting, so go to previous step
-                cachedDirection = Direction;
+                index += sizeof(bool);
+                waitingForSequence = BitConverter.ToBoolean(data, index);
+                index += sizeof(bool);
+                IsPacked = BitConverter.ToBoolean(data, index);
+                index += sizeof(bool);
+                lmcIndex = BitConverter.ToInt32(data, index);
+                index += sizeof(int);
+                IsRunning = BitConverter.ToBoolean(data, index);
+                index += sizeof(bool);
+                SequenceEnded = BitConverter.ToBoolean(data, index);
+                index += sizeof(bool);
+                if (!waitingForSequence && SequenceStep > 0) SequenceStep--; // We were not waiting, so go to previous step
                 return true;
             }
             public bool ShouldSerialize()
@@ -89,73 +99,79 @@ namespace IngameScript
                 // TODO:               
                 // Find good indicator when we should serialize   
                 // For now we always serialize
-                return true;
+                return !IsPacked;
             }
             #endregion
-            public SequenceController(Program program, LegMovementController fLController, LegMovementController fRController, LegMovementController rLController, LegMovementController rRController, DrillController drillController)
+
+            public SequenceController(LegMovementController fLController, LegMovementController fRController, LegMovementController rLController, LegMovementController rRController, DrillController drillController)
             {
-                _program = program;
                 LegMovementControllers.Add(fLController);
                 LegMovementControllers.Add(fRController);
                 LegMovementControllers.Add(rRController);
                 LegMovementControllers.Add(rLController);
                 DrillController = drillController;
             }
+
+            public SequenceController(IList<LegMovementController> LegControllers, DrillController drillController)
+            {
+                LegMovementControllers = LegControllers.ToList();
+                DrillController = drillController;
+            }
+
+            private void ResetFields()
+            {
+                SequenceStep = 0;
+                SequenceInProgress = false;
+                waitingForSequence = false;
+                SequenceEnded = false;
+            }
+
             #region ISequence       
-            public UpdateFrequency MyUpdateFrequency { get; private set; } = UpdateFrequency.Update100;
             public bool TryNextStep()
             {
-                //EchoDebug((!IsRunning || IsPacked || !_shouldContinueFunc()).ToString());
-                if (!IsRunning || IsPacked || !_shouldContinueFunc()) return false;
-
-                if (cachedDirection == MovementDirection.Down)
+                if (!IsRunning || IsPacked || !shouldContinueFunc()) return false;
+                if (Direction == MovementDirection.Down)
                 {
-                    if (cachedDirection != Direction) // requested direction switch;
+                    if (Direction != RequestedDirection && SequenceStep <= 1)
                     {
-                        if (SequenceStep != 1)
+                        ResetFields();
+                        Direction = RequestedDirection;
+                        DrillController.Pack();
+                        foreach (var lmc in LegMovementControllers)
                         {
-                            SequenceStep = 0;
-                            cachedDirection = MovementDirection.Up;
-                            DrillController.Pack();
-                            foreach (var lmc in LegMovementControllers)
-                            {
-                                lmc.SwitchDirection(MovementDirection.Up);
-                            }
-                            return false;
+                            lmc.SwitchDirection(MovementDirection.Up);
+                            lmc.RestartSequence();
                         }
+                        shouldContinueFunc = TrueFunc;
+                        return true;
                     }
-                    else
-                    {
-                        _shouldContinueFunc = DescentSequence();
-                    }
+                    shouldContinueFunc = DescentSequence();
                 }
                 else
                 {
-                    if (cachedDirection != Direction) // requested direction switch;
+                    if (Direction != RequestedDirection && SequenceStep >= 2)
                     {
-                        if (SequenceStep != 0)
+                        ResetFields();
+                        Direction = RequestedDirection;
+                        DrillController.Unpack();
+                        foreach (var lmc in LegMovementControllers)
                         {
-                            SequenceStep = 0;
-                            cachedDirection = MovementDirection.Down;
-                            DrillController.Unpack();
-                            foreach (var lmc in LegMovementControllers)
-                            {
-                                lmc.SwitchDirection(MovementDirection.Down);
-                            }
+                            lmc.SwitchDirection(MovementDirection.Down);
+                            lmc.RestartSequence();
                         }
+                        shouldContinueFunc = TrueFunc;
+                        return true;
                     }
-                    else
-                    {
-                        _shouldContinueFunc = AscendSequence();
-                    }
+                    shouldContinueFunc = AscendSequence();
                 }
-                //EchoDebug($"Waiting: {waitingForSequence}");
-                if (!waitingForSequence) { SequenceStep++; }
+                if (SequenceEnded) { ResetFields(); }
+                else if (!waitingForSequence) { SequenceStep++; }
                 return true;
             }
             #endregion     
 
-            #region commands   
+            #region commands
+            public bool IsSafeToPack { get { return !IsRunning || SequenceEnded; } }
             public void Pack()
             {
                 DrillController.Pack();
@@ -164,6 +180,8 @@ namespace IngameScript
                 IsRunning = false;
                 SequenceStep = 0;
             }
+
+            public bool IsSafeToUnpack { get { return !IsRunning || IsPacked; } }
             public void Unpack()
             {
                 DrillController.Unpack();
@@ -172,16 +190,13 @@ namespace IngameScript
                 IsRunning = false;
                 SequenceStep = 0;
             }
-            public void StartAscend()
+
+            public void RequestDirection(MovementDirection direction)
             {
                 IsRunning = true;
-                Direction = MovementDirection.Up;
+                RequestedDirection = direction;
             }
-            public void StartDescend()
-            {
-                IsRunning = true;
-                Direction = MovementDirection.Down;
-            }
+
             public void Stop()
             {
                 IsRunning = false;
@@ -189,30 +204,26 @@ namespace IngameScript
             #endregion
             private Func<bool> DescentSequence()
             {
-                SequenceInProgress = true;
                 switch (SequenceStep)
                 {
                     case 0:
-                        //EchoDebug("Running Drilling Sequence");
+                        SequenceInProgress = true;
+                        SequenceEnded = false;
                         DrillController.TryNextStep();
                         waitingForSequence = DrillController.SequenceInProgress;
                         return TrueFunc;
                     case 1:
-                        //EchoDebug("Running Movement Sequence");
-                        if (EjectableCargoFraction >= 0.3 && EjectableCargoVolumeFillFactor >= 0.5)
-                        {
-                            waitingForSequence = true;
-                            return () => EjectableCargoFraction <= 0.3 || EjectableCargoVolumeFillFactor <= 0.5;
-                        }
-                        waitingForSequence = TryMovementStep_New();
-                        return TrueFunc;
+                        return () => EjectableCargoFraction <= 0.3 || EjectableCargoVolumeFillFactor <= 0.45;
                     case 2:
+                        waitingForSequence = TryParallelMovementStep();
+                        return TrueFunc;
+                    case 3:
                         lmcIndex = (lmcIndex + 1) % LegMovementControllers.Count; // Advance start Index to avoid direction bias
                         LegMovementControllers.ForEach(itm => itm.RestartSequence());
-                        SequenceStep = -1;
+                        SequenceEnded = true;
                         return TrueFunc;
                     default:
-                        return () => false;
+                        return TrueFunc;
                 }
             }
             private Func<bool> AscendSequence()
@@ -220,22 +231,26 @@ namespace IngameScript
                 switch (SequenceStep)
                 {
                     case 0:
-                        //EchoDebug("Running Movement Sequence");
-                        waitingForSequence = TryMovementStep_New();
+                        SequenceInProgress = true;
+                        SequenceEnded = false;
+                        waitingForSequence = TryParallelMovementStep();
                         return TrueFunc;
                     case 1:
                         lmcIndex = (lmcIndex + 1) % LegMovementControllers.Count; // Advance start Index to avoid direction bias
                         var isDone = true;
-                        LegMovementControllers.ForEach(itm => { isDone &= itm.HasAscended; });
-                        LegMovementControllers.ForEach(itm => itm.RestartSequence());
-                        SequenceStep = -1;
+                        LegMovementControllers.ForEach(lmc => { isDone &= lmc.HasAscended; });
                         if (isDone)
                         {
+                            EchoDebug("IsAscended");
                             IsRunning = false;
                         }
+                        LegMovementControllers.ForEach(lmc => lmc.RestartSequence());
+                        return TrueFunc;
+                    case 2:
+                        SequenceEnded = true;
                         return TrueFunc;
                     default:
-                        return () => false;
+                        return TrueFunc;
                 }
             }
             // Returns true if Sequence is still running
@@ -249,7 +264,6 @@ namespace IngameScript
                 {
                     if (doNextLeg)
                     {
-                        //EchoDebug($"Leg {lmcIndex}");
                         LegMovementControllers[lmcIndex].TryNextStep();
                     }
                     doNextLeg = LegMovementControllers[lmcIndex].ShouldMoveNextLeg;
@@ -261,7 +275,7 @@ namespace IngameScript
                 return inProgress;
             }
 
-            private bool TryMovementStep_New()
+            private bool TryParallelMovementStep()
             {
                 bool allLegsMoveNext = true;
                 bool inProgress = false;
@@ -269,7 +283,6 @@ namespace IngameScript
                 bool doNextLeg = true;
                 for (i = 0; i < LegMovementControllers.Count; i = i + 2)
                 {
-                    EchoDebug($"Leg {lmcIndex}");
                     int index2 = (lmcIndex + 2) % LegMovementControllers.Count;
                     if (doNextLeg)
                     {
@@ -284,7 +297,11 @@ namespace IngameScript
                     inProgress |= LegMovementControllers[index2].SequenceInProgress;
                     lmcIndex = (lmcIndex + 1) % LegMovementControllers.Count;
                 }
-                if (allLegsMoveNext && i >= LegMovementControllers.Count) LegMovementControllers.ForEach(lmc => lmc.ContinueSequence());
+                if (allLegsMoveNext && i >= LegMovementControllers.Count)
+                {
+                    LegMovementControllers.ForEach(lmc => lmc.ContinueSequence());
+                }
+
                 return inProgress;
             }
 

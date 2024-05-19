@@ -23,12 +23,12 @@ namespace IngameScript
 {
     partial class Program
     {
-        public class StorageMonitor : ISaveable
+        public class StorageMonitor //: ISaveable
         {
             private List<IMyInventory> inventories = new List<IMyInventory>();
             private HashSet<MyItemType> itemBlackList = new HashSet<MyItemType>();
             private float blacklistAllowedPercent;
-            private const float cargoFilledPercent = 0.9f;
+            private const float cargoFilledPercent = 0.85f;
 
             public MyFixedPoint TotalVolume { get; private set; } = new MyFixedPoint();
             public MyFixedPoint CurrentVolume { get; private set; } = new MyFixedPoint();
