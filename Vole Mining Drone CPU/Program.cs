@@ -18,6 +18,7 @@ using VRage.Game.ModAPI.Ingame;
 using VRage.Game.ModAPI.Ingame.Utilities;
 using VRage.Game.ObjectBuilders.Definitions;
 using VRageMath;
+using IMyShipController = Sandbox.ModAPI.Ingame.IMyShipController;
 
 namespace IngameScript
 {
@@ -46,6 +47,8 @@ namespace IngameScript
         //
         // to learn more about ingame scripts.
 
+        private ProgramStorage Vars;
+
         private LegMovementController LegControllerFL;
         private LegMovementController LegControllerFR;
         private LegMovementController LegControllerRL;
@@ -62,20 +65,16 @@ namespace IngameScript
         private SimpleMovingAverage runtimeAvg = new SimpleMovingAverage(100);
 
         private bool _inventoryFull = false;
+        private IMyShipController ShipController;
 
         public Program()
         {
+            Vars = new ProgramStorage(this);
             _debugEcho = Echo;
-            // The constructor, called only once every session and
-            // always before any other method is called. Use it to
-            // initialize your script. 
-            //     
-            // The constructor is optional and can be removed if not
-            // needed.
-            // 
-            // It's recommended to set Runtime.UpdateFrequency 
-            // here, which will allow your script to run itself without a 
-            // timer block.
+            /*
+             * Get all of the required blocks on the ship 
+             */
+            bool IsInitialized = true;
             persistantStorage = new PersistantStorage(this);
             var rotors = new List<IMyMotorStator>();
             GridTerminalSystem.GetBlocksOfType(rotors, block => block.IsSameConstructAs(Me));
@@ -91,29 +90,39 @@ namespace IngameScript
             GridTerminalSystem.GetBlocksOfType(connectors, block => block.IsSameConstructAs(Me));
             var storages = new List<IMyCargoContainer>();
             GridTerminalSystem.GetBlocksOfType(storages, block => block.IsSameConstructAs(Me));
-            if(storages == null || storages.Count == 0)
+            if (storages == null || storages.Count == 0)
             {
+                IsInitialized = false;
                 Echo("No CargoContainers found!");
             }
+            var shipControllers = new List<IMyShipController>();
+            GridTerminalSystem.GetBlocksOfType(shipControllers, block => block.IsSameConstructAs(Me));
+            if (storages == null || storages.Count == 0)
+            {
+                IsInitialized = false;
+                Echo("No ShipController found!");
+            }
 
+            ShipController = shipControllers[0];
             var flLeg = LegDefinition.CreateFromLists(this, LegDefinition.LegLocation.FrontLeft, rotors, pistons, sensors, landingGears);
             var frLeg = LegDefinition.CreateFromLists(this, LegDefinition.LegLocation.FrontRight, rotors, pistons, sensors, landingGears);
             var rlLeg = LegDefinition.CreateFromLists(this, LegDefinition.LegLocation.RearLeft, rotors, pistons, sensors, landingGears);
             var rrLeg = LegDefinition.CreateFromLists(this, LegDefinition.LegLocation.RearRight, rotors, pistons, sensors, landingGears);
-            var mainDrill = DrillDefinition.CreateFromLists(this, rotors, pistons, drills, connectors);
-            
-            
-            if (!flLeg.IsInitialized | !frLeg.IsInitialized | !rlLeg.IsInitialized | !rrLeg.IsInitialized | !mainDrill.IsInitialized) return;
+            var mainDrill = DrillDefinition.CreateFromLists(this, rotors, pistons, drills, connectors, sensors);
+
+
+            if (!IsInitialized || !flLeg.IsInitialized | !frLeg.IsInitialized | !rlLeg.IsInitialized | !rrLeg.IsInitialized | !mainDrill.IsInitialized) return;
 
             MainDrillController = new DrillController(mainDrill, DrillSpeed, DrillRPM);
             LegControllerFL = new LegMovementController(flLeg);
             LegControllerFR = new LegMovementController(frLeg);
             LegControllerRL = new LegMovementController(rlLeg);
             LegControllerRR = new LegMovementController(rrLeg);
-            sequenceController = new SequenceController(this, LegControllerFL, LegControllerFR, LegControllerRL, LegControllerRR, MainDrillController);
+            sequenceController = new SequenceController(LegControllerFL, LegControllerFR, LegControllerRL, LegControllerRR, MainDrillController);
             storageMonitor = new StorageMonitor(storages);
             storageMonitor.RegisterCargo(MainDrillController.DrillDef.GetDrillInventories());
 
+            persistantStorage.Register(Vars);
             persistantStorage.Register(LegControllerFL);
             persistantStorage.Register(LegControllerFR);
             persistantStorage.Register(LegControllerRL);
@@ -123,7 +132,7 @@ namespace IngameScript
 
             RegisterCommands();
 
-            if(this.Storage != string.Empty)
+            if (this.Storage != string.Empty)
             {
                 if (persistantStorage.DeserializeAll(this.Storage))
                 {
@@ -131,7 +140,7 @@ namespace IngameScript
                 }
             }
 
-            this.Runtime.UpdateFrequency = UpdateFrequency.Update10 | UpdateFrequency.Update100;
+            //this.Runtime.UpdateFrequency = UpdateFrequency.Update10 | UpdateFrequency.Update100;
         }
 
         public void Save()
@@ -139,9 +148,7 @@ namespace IngameScript
             // Called when the program needs to save its state. Use
             // this method to save your state to the Storage field
             // or some other means. 
-            // 
-            // This method is optional and can be removed if not
-            // needed.
+
             this.Storage = persistantStorage.SerializeAll();
         }
 
@@ -156,38 +163,27 @@ namespace IngameScript
             // 
             // The method itself is required, but the arguments above
             // can be removed if not needed.
-            if((updateSource & (UpdateType.Terminal | UpdateType.Trigger | UpdateType.Script)) != 0)
+            if ((updateSource & (UpdateType.Terminal | UpdateType.Trigger | UpdateType.Script)) != 0)
             {
                 RunDefault(argument);
             }
-            else if ((updateSource & UpdateType.Update1) != 0)
+            if ((updateSource & UpdateType.Update10) != 0)
             {
-
-            }
-            else if ((updateSource & UpdateType.Update10) != 0)
-            {
-                if(sequenceController.IsRunning)
+                if (sequenceController.IsRunning)
                 {
                     sequenceController.TryNextStep();
                 }
             }
-            else if ((updateSource & UpdateType.Update100) != 0)
+            if ((updateSource & UpdateType.Update100) != 0)
             {
-                _inventoryFull = storageMonitor.CheckInventoryFull();
-                sequenceController.EjectableCargoFraction = storageMonitor.GetBlacklistCargoFraction();
-                sequenceController.EjectableCargoVolumeFillFactor = storageMonitor.GetBlacklistVolumeFillFactor();
-                Echo($"EjectableCargoFraction: {sequenceController.EjectableCargoFraction}");
-                Echo($"EjectableCargoVolumeFillFactor: {sequenceController.EjectableCargoVolumeFillFactor}");
-                if (_inventoryFull)
-                {
-                    Echo("Inventory full!");
-                }
+                InventoryCheck();
+                DepthCheck();
                 //Echo($"Last RunTime: {this.Runtime.LastRunTimeMs}ms");
                 //Echo($"Average RunTime: {runtimeAvg.Update(this.Runtime.LastRunTimeMs)}ms");
             }
         }
 
-        public void RunDefault(string argument)
+        internal void RunDefault(string argument)
         {
             if (_commandLine.TryParse(argument))
             {
@@ -214,25 +210,115 @@ namespace IngameScript
             }
         }
 
-        private void LoadNow()
+        #region Commands
+        private void PackCommand()
         {
-            persistantStorage.DeserializeAll(this.Storage);
+            if( sequenceController.IsSafeToPack || _commandLine.Switch("force"))
+            {
+                sequenceController.Pack();
+                Vars.UpdateFrequency &= ~UpdateFrequency.Update10;
+            }
+            else
+            {
+                Echo("Unsafe to Pack, use -force switch to force!");
+            }
         }
-        private void SaveNow()
+
+        private void UnpackCommand()
         {
-            this.Storage = persistantStorage.SerializeAll();
+            if (sequenceController.IsSafeToUnpack || _commandLine.Switch("force"))
+            {
+                sequenceController.Unpack();
+                Vars.UpdateFrequency |= UpdateFrequency.Update10 | UpdateFrequency.Update100;
+            } else
+            {
+                Echo("Unsafe to Unpack, use -force switch to force!");
+            }
         }
+
+        private void SetDepthCommand()
+        {
+            const int addValue = 25;
+            if (_commandLine.Items.Count >= 2)
+            {
+                var arg = _commandLine.Items[1];
+                if (arg == "+")
+                {
+                    Vars.MaxDrillingDepth += addValue;
+                }
+                else if (arg == "-")
+                {
+                    Vars.MaxDrillingDepth -= addValue;
+                }
+                else
+                {
+                    int val = 100;
+                    if (int.TryParse(arg, out val)) Vars.MaxDrillingDepth = val;
+                }
+                Echo($"Max Drilling Depth: {Vars.MaxDrillingDepth}");
+            }
+        }
+
+        private void StartUpdatesCommand()
+        {
+            var allSwitch = _commandLine.Switch("-all");
+            var update = UpdateFrequency.Update100;
+            if (allSwitch)
+            {
+                update |= UpdateFrequency.Update10;
+            }
+            Vars.UpdateFrequency |= update;
+        }
+        #endregion
 
         private void RegisterCommands()
         {
-            _commands.Add("pack", sequenceController.Pack);
-            _commands.Add("unpack", sequenceController.Unpack);
-            _commands.Add("descend", sequenceController.StartDescend);
-            _commands.Add("ascend", sequenceController.StartAscend);
-            _commands.Add("stop", sequenceController.Stop);
-            _commands.Add("loadnow", LoadNow);
-            _commands.Add("savenow", SaveNow);
+            _commands.Add("Pack", PackCommand);
+            _commands.Add("Unpack", UnpackCommand);
+            _commands.Add("Stop", sequenceController.Stop);
+
+            _commands.Add("StartDrilling", () => sequenceController.RequestDirection(MovementDirection.Down));
+            _commands.Add("StopDrilling", () => sequenceController.RequestDirection(MovementDirection.Up));
+            _commands.Add("Descend", () => sequenceController.RequestDirection(MovementDirection.Down));
+            _commands.Add("Ascend", () => sequenceController.RequestDirection(MovementDirection.Up));
+
+            _commands.Add("SetMaxDepth", SetDepthCommand);
+            _commands.Add("StopUpdates", () => { Vars.UpdateFrequency = UpdateFrequency.None; });
+            _commands.Add("StartUpdates", StartUpdatesCommand);
+
+            _commands.Add("loadnow", () => persistantStorage.DeserializeAll(this.Storage));
+            _commands.Add("savenow", () => this.Storage = persistantStorage.SerializeAll());
+            _commands.Add("resetstorage", () => this.Storage = String.Empty);
         }
+
+        private void InventoryCheck()
+        {
+            _inventoryFull = storageMonitor.CheckInventoryFull();
+            sequenceController.EjectableCargoFraction = storageMonitor.GetBlacklistCargoFraction();
+            sequenceController.EjectableCargoVolumeFillFactor = storageMonitor.GetBlacklistVolumeFillFactor();
+            if (_inventoryFull)
+            {
+                if (sequenceController.IsRunning && sequenceController.RequestedDirection == MovementDirection.Down)
+                {
+                    sequenceController.RequestDirection(MovementDirection.Up);
+                }
+            }
+        }
+
+        private void DepthCheck()
+        {
+            double elevation = 0;
+            if (ShipController.TryGetPlanetElevation(MyPlanetElevation.Surface, out elevation))
+            {
+                if (sequenceController.IsRunning && sequenceController.RequestedDirection == MovementDirection.Down && elevation > Vars.MaxDrillingDepth)
+                {
+                    Echo($"Elevation: {elevation}");
+                    sequenceController.RequestDirection(MovementDirection.Up);
+                }
+            }
+        }
+
+        
 
         #region Helper Functions
 

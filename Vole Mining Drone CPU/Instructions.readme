@@ -1,5 +1,22 @@
 ﻿R e a d m e
 -----------
+Commands
+-----------
+Pack [-force]
+# Packs the Craft up for transport
+
+Unpack [-force]
+# Unpacks the craft to working condition
+
+StartDrilling
+# Start the Drilling Sequence
+
+StopDrilling
+# Stops the Drilling Sequence and starts Ascend
+
+SetMaxDepth '+'/'-'/int
+#  Increases/Decreases/Sets the maximum Drilling Depth below the surface
+
 
 To use this script CustomData needs to be added to the Legs that should be controlled.
 Exptected CustomData is for 4 Legs:
